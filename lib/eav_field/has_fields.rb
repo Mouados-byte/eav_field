@@ -36,6 +36,14 @@ module EavField
           raise(UnknownField, "Unknown EAV field #{name.inspect} for #{self.name}")
       end
 
+      def relate_eav_fields(source, target, as:)
+        find_eav_field!(source).relate_to(find_eav_field!(target), as: as)
+      end
+
+      def eav_field_relationships
+        DefinitionRelationship.where(source_definition_id: eav_field_definitions.select(:id))
+      end
+
       def with_eav_field(name, value = Query::UNSET, **conditions)
         Query.new(self, find_eav_field!(name)).filter(value, conditions)
       end

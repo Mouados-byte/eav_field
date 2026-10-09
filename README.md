@@ -4,14 +4,14 @@ EavField adds an entity-attribute-value (EAV) system to existing Active Record m
 
 Requires Ruby 3.2+ and Active Record/Railties 7.1–8.x. The gem constrains JSON to 2.x for compatibility with these Rails versions. The development suite uses SQLite and Minitest.
 
-The published release is 0.1.0. This checkout prepares 0.2.0 with validation rules, advanced queries, sorting, and collection preloading. Use a local path or the GitHub dependency below to try these additions before publication.
+The published release is 0.2.0, with validation rules, advanced queries, sorting, and collection preloading. This checkout prepares 0.3.0 with named relationships between field definitions. Use a local path or the GitHub dependency below to try relationships before publication.
 
 ## Install in a Rails application
 
 Add the gem to your application's `Gemfile`:
 
 ```ruby
-gem "eav_field", "~> 0.1.0"
+gem "eav_field", "~> 0.2.0"
 ```
 
 Then run from the Rails application's root:
@@ -24,13 +24,13 @@ bin/rails db:migrate
 
 For local gem development, replace the dependency with `gem "eav_field", path: "../eav_field"`, adjusting the path to this checkout.
 
-To use the upcoming 0.2.0 code from GitHub:
+To use the upcoming 0.3.0 code from GitHub:
 
 ```ruby
 gem "eav_field", github: "Mouados-byte/eav_field", branch: "main"
 ```
 
-The generator creates `eav_field_definitions` and `eav_field_values`. Owner IDs use `bigint` by default. For PostgreSQL UUID owners, generate with `--entity-id-type=uuid`; for string IDs, use `--entity-id-type=string`. All participating models must have IDs compatible with the selected column type.
+The generator creates `eav_field_definitions` and `eav_field_values`; the 0.3.0 installer also creates `eav_field_definition_relationships`. Owner IDs use `bigint` by default. For PostgreSQL UUID owners, generate with `--entity-id-type=uuid`; for string IDs, use `--entity-id-type=string`. All participating models must have IDs compatible with the selected column type.
 
 Opt in on any existing model:
 
@@ -40,16 +40,26 @@ class Product < ApplicationRecord
 end
 ```
 
-## Upgrade an existing 0.1.0 installation
+## Upgrade an existing installation
 
-After updating the dependency to the 0.2.0 code, generate and run the additive migration:
+After updating the dependency to the 0.3.0 code, add relationships to an existing 0.2.0 installation:
 
 ```sh
-bin/rails generate eav_field:upgrade
+bin/rails generate eav_field:relationships
 bin/rails db:migrate
 ```
 
-This adds the nullable `validation_rules` JSON column and preserves definitions and values. Existing definitions start without extra rules. Fresh installations already include this column; run only `eav_field:install` for those. Roll back the upgrade migration before switching the application back to 0.1.0. Rolling back discards validation rules but preserves stored values.
+This adds only the relationship table and its indexes and constraints. Definitions, validation rules, and stored values are preserved. Rolling back this migration removes links while preserving the other EAV data.
+
+For an existing 0.1.0 installation, generate both additive migrations:
+
+```sh
+bin/rails generate eav_field:upgrade
+bin/rails generate eav_field:relationships
+bin/rails db:migrate
+```
+
+The `upgrade` migration adds the nullable `validation_rules` JSON column; existing definitions start without extra rules. Roll it back before switching back to 0.1.0. Rolling back discards validation rules but preserves stored values. Fresh installations include all current tables and columns; run only `eav_field:install` for those.
 
 ## Define and use fields
 
@@ -80,6 +90,31 @@ Both symbol and string keys work. Hash assignment merges fields; omitted fields 
 Definitions are scoped to the model's polymorphic base class. Different models can use the same field name with different types. STI subclasses share their base model's definitions. Names use lowercase letters, digits, and underscores, starting with a letter, such as `shipping_weight`.
 
 Definitions persist across application restarts. Keep definition creation out of model class bodies. Duplicate definitions raise `ActiveRecord::RecordInvalid`; for repeatable seeds, check `Product.eav_field_definitions.exists?(name: "color")` before defining a field.
+
+## Relationships between field definitions
+
+Named links connect definitions in a specific direction:
+
+```ruby
+country = Product.define_eav_field(:country, type: :string)
+state = Product.define_eav_field(:state, type: :string)
+relationship = Product.relate_eav_fields(:state, :country, as: :depends_on)
+
+relationship.source_definition # => state
+relationship.target_definition # => country
+relationship.kind              # => "depends_on"
+state.related_definitions(as: :depends_on).pluck(:name)       # => ["country"]
+country.referencing_definitions(as: :depends_on).pluck(:name) # => ["state"]
+
+Product.eav_field_relationships.where(kind: "depends_on")
+state.remove_relationship(country, as: :depends_on) # => 1; returns 0 if absent.
+```
+
+You can also create a link from definition objects with `state.relate_to(country, as: :depends_on)`. `outgoing_relationships` and `incoming_relationships` expose the link records. Traversal methods return chainable Active Record relations; omit `as:` to include every kind, with each definition returned once.
+
+Both definitions must already be saved and belong to the same model scope; STI subclasses share their base model's scope. Kinds follow field naming conventions and are at most 100 characters. A source/target/kind combination must be unique, and a definition cannot link to itself. Different kinds between the same definitions and cycles between multiple definitions are allowed.
+
+Kinds are descriptive metadata: `depends_on` records a dependency for application code to interpret. Use custom validators to enforce conditional requirements. Links do not change stored values or defaults. Destroying either definition removes its incoming and outgoing links while preserving the other definitions and their values. Database foreign keys also remove links when deleting definitions without callbacks.
 
 ## Types and validation
 
@@ -210,7 +245,7 @@ bundle exec rake test       # Minitest, including real Rails installation and ro
 bundle exec rubocop         # Lint and check formatting.
 bundle exec rubocop -a      # Apply safe formatting corrections.
 bundle exec rake            # Tests and lint together.
-bundle exec rake build      # Build pkg/eav_field-0.2.0.gem.
+bundle exec rake build      # Build pkg/eav_field-0.3.0.gem.
 ```
 
 To check a different Rails series:

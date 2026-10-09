@@ -33,5 +33,7 @@ class CreateEavFieldTables < ActiveRecord::Migration[<%= migration_version %>]
 
     add_index :eav_field_values, [ :entity_type, :entity_id, :attribute_definition_id ], unique: true,
       name: "index_eav_field_values_on_entity_and_definition"
+
+<%= definition_relationships_table %>
   end
 end

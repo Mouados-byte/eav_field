@@ -5,6 +5,10 @@ module EavField
     self.table_name = "eav_field_definitions"
 
     has_many :values, class_name: "EavField::Value", inverse_of: :attribute_definition, dependent: :destroy
+    has_many :outgoing_relationships, class_name: "EavField::DefinitionRelationship",
+      foreign_key: :source_definition_id, inverse_of: :source_definition, dependent: :delete_all
+    has_many :incoming_relationships, class_name: "EavField::DefinitionRelationship",
+      foreign_key: :target_definition_id, inverse_of: :target_definition, dependent: :delete_all
 
     validates :entity_type, presence: true, length: { maximum: 255 }
     validates :name, presence: true, length: { maximum: 100 },
@@ -34,6 +38,30 @@ module EavField
       errors = ValidationRules.new(data_type, validation_rules || {}).errors_for(cast(value))
       errors.unshift("can't be blank") if required? && Types.missing?(value)
       errors
+    end
+
+    def relate_to(definition, as:)
+      outgoing_relationships.create!(target_definition: definition, kind: as.to_s)
+    end
+
+    def remove_relationship(definition, as:)
+      unless definition.is_a?(AttributeDefinition) && definition.persisted?
+        raise ArgumentError, "A saved attribute definition is required"
+      end
+
+      outgoing_relationships.where(target_definition_id: definition.id, kind: as.to_s).destroy_all.size
+    end
+
+    def related_definitions(as: nil)
+      relationships = outgoing_relationships
+      relationships = relationships.where(kind: as.to_s) unless as.nil?
+      AttributeDefinition.where(id: relationships.select(:target_definition_id))
+    end
+
+    def referencing_definitions(as: nil)
+      relationships = incoming_relationships
+      relationships = relationships.where(kind: as.to_s) unless as.nil?
+      AttributeDefinition.where(id: relationships.select(:source_definition_id))
     end
 
     private

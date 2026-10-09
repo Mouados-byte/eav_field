@@ -1,6 +1,14 @@
 # Changelog
 
-## 0.2.0 — Unreleased
+## 0.3.0 — Unreleased
+
+- Add directed, named links between persisted field definitions in the same model scope, including STI support.
+- Add model helpers, outgoing and incoming relationship associations, chainable traversal, and link removal.
+- Reject duplicate links and self-links with validations and database constraints; cascade links when either definition is deleted.
+- Add an additive `eav_field:relationships` migration for existing installations and include relationships in fresh installs.
+- Preserve definitions, validation rules, and stored values during relationship upgrades and rollbacks.
+
+## 0.2.0 — 2026-10-09
 
 - Add persisted minimum/maximum, length, and allowed-choice validation rules with owner errors and validated defaults.
 - Add application-defined `validate_eav_field` blocks with inheritance and support for defaults.

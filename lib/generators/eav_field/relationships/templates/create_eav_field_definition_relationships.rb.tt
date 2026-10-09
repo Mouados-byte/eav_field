@@ -1,0 +1,7 @@
+# frozen_string_literal: true
+
+class CreateEavFieldDefinitionRelationships < ActiveRecord::Migration[<%= migration_version %>]
+  def change
+<%= definition_relationships_table %>
+  end
+end

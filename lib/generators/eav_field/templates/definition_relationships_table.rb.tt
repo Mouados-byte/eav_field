@@ -1,0 +1,16 @@
+    create_table :eav_field_definition_relationships do |t|
+      t.references :source_definition, null: false, index: false,
+        foreign_key: { to_table: :eav_field_definitions, on_delete: :cascade }
+      t.references :target_definition, null: false, index: false,
+        foreign_key: { to_table: :eav_field_definitions, on_delete: :cascade }
+      t.string :kind, limit: 100, null: false
+      t.timestamps
+      t.check_constraint "source_definition_id <> target_definition_id",
+        name: "eav_definition_relationships_no_self_link"
+    end
+
+    add_index :eav_field_definition_relationships,
+      [ :source_definition_id, :kind, :target_definition_id ], unique: true,
+      name: "index_eav_definition_relationships_on_source_kind_target"
+    add_index :eav_field_definition_relationships, [ :target_definition_id, :kind ],
+      name: "index_eav_definition_relationships_on_target_and_kind"
