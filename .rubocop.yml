@@ -1,0 +1,23 @@
+inherit_gem:
+  rubocop-rails-omakase: rubocop.yml
+
+AllCops:
+  TargetRubyVersion: 3.2
+  NewCops: enable
+  Exclude:
+    - "pkg/**/*"
+    - "tmp/**/*"
+    - "lib/generators/**/templates/**/*"
+
+Layout/IndentationWidth:
+  Enabled: true
+
+Layout/IndentationConsistency:
+  Enabled: true
+  EnforcedStyle: normal
+
+Lint:
+  Enabled: true
+
+Security:
+  Enabled: true

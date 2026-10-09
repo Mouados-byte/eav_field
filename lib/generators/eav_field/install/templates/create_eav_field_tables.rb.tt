@@ -1,0 +1,36 @@
+# frozen_string_literal: true
+
+class CreateEavFieldTables < ActiveRecord::Migration[<%= migration_version %>]
+  def change
+    create_table :eav_field_definitions do |t|
+      t.string :entity_type, null: false
+      t.string :name, limit: 100, null: false
+      t.string :data_type, limit: 20, null: false
+      t.boolean :required, default: false, null: false
+      t.json :default_value
+      t.timestamps
+    end
+
+    add_index :eav_field_definitions, [ :entity_type, :name ], unique: true,
+      name: "index_eav_field_definitions_on_entity_and_name"
+
+    create_table :eav_field_values do |t|
+      t.references :attribute_definition, null: false,
+        foreign_key: { to_table: :eav_field_definitions, on_delete: :cascade }
+      t.string :entity_type, null: false
+      t.column :entity_id, :<%= options[:entity_id_type] %>, null: false
+      t.string :string_value
+      t.text :text_value
+      t.bigint :integer_value
+      t.decimal :decimal_value, precision: 30, scale: 10
+      t.boolean :boolean_value
+      t.date :date_value
+      t.datetime :datetime_value, precision: 6
+      t.json :json_value
+      t.timestamps
+    end
+
+    add_index :eav_field_values, [ :entity_type, :entity_id, :attribute_definition_id ], unique: true,
+      name: "index_eav_field_values_on_entity_and_definition"
+  end
+end
