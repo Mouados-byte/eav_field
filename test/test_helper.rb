@@ -50,4 +50,18 @@ class EavFieldTest < Minitest::Test
     Product.delete_all
     Customer.delete_all
   end
+
+  def capture_selects
+    queries = []
+    listener = lambda do |*arguments|
+      payload = arguments.last
+      if payload[:sql].lstrip.start_with?("SELECT") && payload[:name] != "SCHEMA" && !payload[:cached]
+        queries << payload[:sql]
+      end
+    end
+    ActiveSupport::Notifications.subscribed(listener, "sql.active_record") do
+      ActiveRecord::Base.uncached { yield }
+    end
+    queries
+  end
 end

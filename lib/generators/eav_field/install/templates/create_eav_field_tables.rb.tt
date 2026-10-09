@@ -8,6 +8,7 @@ class CreateEavFieldTables < ActiveRecord::Migration[<%= migration_version %>]
       t.string :data_type, limit: 20, null: false
       t.boolean :required, default: false, null: false
       t.json :default_value
+      t.json :validation_rules
       t.timestamps
     end
 

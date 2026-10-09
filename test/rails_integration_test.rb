@@ -5,8 +5,6 @@ require "open3"
 require "rbconfig"
 
 class RailsIntegrationTest < EavFieldTest
-  ROOT = File.expand_path("..", __dir__)
-
   def test_install_migrate_and_use_the_gem_in_a_real_rails_application
     Dir.mktmpdir("eav-field-rails-") do |directory|
       write_application(directory)
@@ -17,6 +15,16 @@ class RailsIntegrationTest < EavFieldTest
         product = Product.create!(name: "Chair", eav_fields: { color: "blue" })
         abort "value was not saved" unless product.reload.eav_fields[:color] == "blue"
         abort "query failed" unless Product.with_eav_field(:color, "blue").exists?(product.id)
+        Product.define_eav_field(:weight, type: :decimal, min: 0, max: 100)
+        product.update!(eav_fields: { weight: "1.25" })
+        abort "range query failed" unless Product.with_eav_field(:weight, gt: 1, lte: 2).exists?(product.id)
+        abort "sorting failed" unless Product.order_by_eav_field(:weight).first.id == product.id
+        Product.preload_eav_fields(Product.all).each do |entry|
+          abort "preload failed" unless entry.eav_fields[:color] == "blue"
+        end
+        product.eav_fields[:weight] = -1
+        abort "validation failed" if product.valid?
+        abort "owner error missing" if product.errors[:"eav_fields.weight"].empty?
         puts "RAILS_INTEGRATION_OK"
       RUBY
       assert_includes output, "RAILS_INTEGRATION_OK"
@@ -40,6 +48,50 @@ class RailsIntegrationTest < EavFieldTest
         abort "value was not saved" unless product.reload.eav_fields[:color] == "blue"
         abort "query failed" unless Product.with_eav_field(:color, "blue").exists?(product.id)
         abort "owner ID changed" unless product.eav_values.first.entity_id == "external-product-1"
+        abort "sorting failed" unless Product.order_by_eav_field(:color).first.id == product.id
+      RUBY
+    end
+  end
+
+  def test_upgrading_version_0_1_preserves_definitions_and_values_and_can_roll_back
+    Dir.mktmpdir("eav-field-upgrade-rails-") do |directory|
+      write_application(directory)
+      run_rails(directory, "generate", "eav_field:install", "--quiet")
+      migration = Dir[File.join(directory, "db/migrate/*_create_eav_field_tables.rb")].fetch(0)
+      File.write(migration, File.read(migration).sub("      t.json :validation_rules\n", ""))
+      run_rails(directory, "db:migrate")
+      run_rails(directory, "runner", <<~RUBY)
+        product = Product.create!(name: "Legacy chair")
+        EavField::AttributeDefinition.insert_all!([ {
+          entity_type: "Product", name: "color", data_type: "string", required: false,
+          default_value: "black", created_at: Time.current, updated_at: Time.current
+        } ])
+        EavField::Value.insert_all!([ {
+          entity_type: "Product", entity_id: product.id,
+          attribute_definition_id: EavField::AttributeDefinition.first.id, string_value: "blue",
+          created_at: Time.current, updated_at: Time.current
+        } ])
+      RUBY
+      run_rails(directory, "generate", "eav_field:upgrade", "--quiet")
+      run_rails(directory, "db:migrate")
+      run_rails(directory, "runner", <<~RUBY)
+        field = Product.find_eav_field!(:color)
+        abort "legacy default changed" unless field.default == "black"
+        abort "legacy rules should be empty" unless field.validation_rules.nil?
+        field.update!(validation_rules: { choices: %w[black blue] })
+        product = Product.first
+        abort "legacy value changed" unless product.eav_fields[:color] == "blue"
+        product.eav_fields[:color] = "red"
+        abort "upgraded validation failed" if product.valid?
+        abort "legacy value was overwritten" unless product.reload.eav_fields[:color] == "blue"
+      RUBY
+      run_rails(directory, "db:rollback", "STEP=1")
+      run_rails(directory, "runner", <<~RUBY)
+        connection = ActiveRecord::Base.connection
+        abort "upgrade rollback failed" if connection.column_exists?(:eav_field_definitions, :validation_rules)
+        abort "legacy definitions removed" unless EavField::AttributeDefinition.count == 1
+        abort "legacy values removed" unless EavField::Value.first&.string_value == "blue"
+        abort "owner removed" unless Product.first.name == "Legacy chair"
       RUBY
     end
   end
@@ -98,7 +150,7 @@ class RailsIntegrationTest < EavFieldTest
 
   def run_rails(directory, *arguments)
     output, errors, status = Open3.capture3(
-      { "BUNDLE_GEMFILE" => File.join(ROOT, "Gemfile"), "RAILS_ENV" => "test" },
+      { "BUNDLE_GEMFILE" => Bundler.default_gemfile.to_s, "RAILS_ENV" => "test" },
       RbConfig.ruby, "bin/rails", *arguments, chdir: directory
     )
     assert status.success?, "rails #{arguments.first} failed:\n#{output}\n#{errors}"

@@ -38,11 +38,13 @@ module EavField
       if Types::COLUMNS.values.any? { |column| column != active_column && !self[column].nil? }
         errors.add(:value, "must use only the column matching its field type")
       end
-      attribute_definition.cast(value)
-      if attribute_definition.required? && Types.missing?(value)
-        errors.add(:value, "can't be blank")
+      definition = if entity && entity.class.polymorphic_name == attribute_definition.entity_type
+        entity.send(:eav_definition_snapshot).find!(attribute_definition.name)
+      else
+        attribute_definition
       end
-    rescue InvalidValue => error
+      definition.validation_errors(value).each { |message| errors.add(:value, message) }
+    rescue InvalidValue, UnknownField => error
       errors.add(:value, error.message)
     end
   end

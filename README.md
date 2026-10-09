@@ -4,6 +4,8 @@ EavField adds an entity-attribute-value (EAV) system to existing Active Record m
 
 Requires Ruby 3.2+ and Active Record/Railties 7.1–8.x. The gem constrains JSON to 2.x for compatibility with these Rails versions. The development suite uses SQLite and Minitest.
 
+The published release is 0.1.0. This checkout prepares 0.2.0 with validation rules, advanced queries, sorting, and collection preloading. Use a local path or the GitHub dependency below to try these additions before publication.
+
 ## Install in a Rails application
 
 Add the gem to your application's `Gemfile`:
@@ -22,6 +24,12 @@ bin/rails db:migrate
 
 For local gem development, replace the dependency with `gem "eav_field", path: "../eav_field"`, adjusting the path to this checkout.
 
+To use the upcoming 0.2.0 code from GitHub:
+
+```ruby
+gem "eav_field", github: "Mouados-byte/eav_field", branch: "main"
+```
+
 The generator creates `eav_field_definitions` and `eav_field_values`. Owner IDs use `bigint` by default. For PostgreSQL UUID owners, generate with `--entity-id-type=uuid`; for string IDs, use `--entity-id-type=string`. All participating models must have IDs compatible with the selected column type.
 
 Opt in on any existing model:
@@ -31,6 +39,17 @@ class Product < ApplicationRecord
   has_eav_fields
 end
 ```
+
+## Upgrade an existing 0.1.0 installation
+
+After updating the dependency to the 0.2.0 code, generate and run the additive migration:
+
+```sh
+bin/rails generate eav_field:upgrade
+bin/rails db:migrate
+```
+
+This adds the nullable `validation_rules` JSON column and preserves definitions and values. Existing definitions start without extra rules. Fresh installations already include this column; run only `eav_field:install` for those. Roll back the upgrade migration before switching the application back to 0.1.0. Rolling back discards validation rules but preserves stored values.
 
 ## Define and use fields
 
@@ -85,7 +104,43 @@ product.save!
 product.eav_fields[:color] # => "black"
 ```
 
-Definition names, types, and entity scopes are immutable after creation. Defaults and `required` flags can be updated through `Product.eav_field_definitions`. Adding a required definition affects validation of existing owners on their next save.
+Definition names, types, and entity scopes are immutable after creation. Defaults, `required` flags, and `validation_rules` can be updated through `Product.eav_field_definitions`. Adding or tightening a rule affects existing owners on their next validation; it does not rewrite stored values.
+
+## Validation rules
+
+```ruby
+Product.define_eav_field(:weight, type: :decimal, min: 0, max: "100.5")
+Product.define_eav_field(:size, type: :string, choices: %w[small medium large])
+Product.define_eav_field(:serial, type: :string, min_length: 3, max_length: 20)
+Product.define_eav_field(:released_on, type: :date, min: "2026-01-01")
+
+product.eav_fields[:weight] = -1
+product.valid?                      # => false
+product.errors["eav_fields.weight"] # => ["must be greater than or equal to 0"]
+```
+
+`min` and `max` are inclusive and support integer, decimal, date, and datetime fields. `min_length` and `max_length` count characters in strings and text. `choices` accepts a nonempty array of values matching the field's type; each choice must also satisfy the bounds and length rules. Optional `nil` values skip these rules; use `required: true` to reject missing values. Unknown or incompatible rules and defaults that violate rules are rejected when saving the definition.
+
+Type errors still raise immediately on assignment. Rule violations participate in owner validation, so forms can display errors before saving. Direct value saves also enforce the persisted rules. To edit rules, replace the definition's hash:
+
+```ruby
+Product.eav_field_definitions.find_by!(name: "weight")
+  .update!(validation_rules: { min: 1, max: 200 })
+```
+
+Keep custom validators in model code. They run when validating an owner, receive its effective value including defaults, and can add ordinary Rails errors:
+
+```ruby
+class Product < ApplicationRecord
+  has_eav_fields
+
+  validate_eav_field(:quantity) do |record, value|
+    record.errors.add("eav_fields.quantity", "must be even") if value && value.odd?
+  end
+end
+```
+
+Multiple blocks accumulate and are inherited by subclasses. Registering a block does not create a definition; define the field separately after migration. Custom blocks run through owner validation, so save the owner when using them.
 
 ## Query fields
 
@@ -93,9 +148,47 @@ Definition names, types, and entity scopes are immutable after creation. Default
 Product.with_eav_field(:color, "blue")
 Product.where(name: "Chair").with_eav_field(:weight, "1.25")
 Product.with_eav_field(:color, "blue").with_eav_field(:available, false)
+Product.with_eav_field(:weight, gt: "1.25", lte: "10")
+Product.with_eav_field(:weight, 1...10)
+Product.with_eav_field(:color, in: %w[blue green])
+Product.with_eav_field(:color, missing: true)
+Product.order_by_eav_field(:weight, :asc, nulls: :last).order(:id)
 ```
 
-These return chainable Active Record relations with typed equality comparisons. Matching defaults include owners without a stored override; explicit null overrides remain distinct from non-null defaults. Queries use persisted values. JSON equality raises `EavField::UnsupportedQuery` because JSON comparisons differ between database adapters.
+These return chainable Active Record relations and use persisted values. Matching defaults include owners without a stored override; explicit null overrides remain distinct from non-null defaults. Filter inputs are type-cast but need not satisfy validation rules: `gt: 0` is valid even if a field requires `min: 5`.
+
+| Operator | Behavior |
+| --- | --- |
+| `eq`, `not_eq` | Equality and inequality; a positional value means `eq`. |
+| `gt`, `gte`, `lt`, `lte` | Numeric, date, or datetime comparisons. |
+| `in` | Match a typed array of values; `nil` matches null values; an empty array matches nothing. |
+| `between` | A Ruby range or inclusive `[lower, upper]` pair; exclusive and open-ended ranges are supported. A positional range means `between`. |
+| `missing` | `true` means no stored row, even when a default exists; `false` means a stored row exists, including an explicit null. Use this operator alone. |
+
+Multiple operators in one call use AND. Supply either a positional value or keyword operators. Inequality follows SQL null semantics: `not_eq: "blue"` excludes nulls; `not_eq: nil` selects non-null effective values. JSON supports `missing` filters; other comparisons and sorting raise `EavField::UnsupportedQuery` because their behavior differs between adapters.
+
+Sorting uses effective defaults, preserves explicit null overrides, and supports `:asc`/`:desc` and `nulls: :first`/`:last`. It appends to existing ordering. Add a normal column such as `.order(:id)` to break ties. String ordering follows the database's collation.
+
+## Efficient loading and definition caching
+
+```ruby
+products = Product.preload_eav_fields(Product.where(name: "Chair").limit(100))
+products.each do |product|
+  puts product.eav_fields[:color]
+  puts product.eav_fields[:weight]
+end
+
+Product.with_eav_definition_cache do
+  Product.with_eav_field(:color, "blue").count
+  Product.with_eav_field(:weight, gt: 1).count
+end
+```
+
+`preload_eav_fields` returns an array, batches value loading, and shares one definition snapshot across the records. Repeated reads of preloaded fields require no queries. Pass owners from one model or its STI subclasses; unsaved changes are preserved. For large exports, call it for each `find_in_batches` batch.
+
+Owners cache their definition snapshot on first use. `with_eav_definition_cache` additionally shares definitions within an execution-local block, including class-level lookups. Nested blocks share the same cache, which is removed when the outer block exits.
+
+Definition creates, updates, deletes, commits, and rollbacks through Active Record callbacks invalidate snapshots in the current process. Loaded owners retain snapshots of changes made by another process, just as loaded associations do. Refresh them with `product.reload_eav_field_definitions` or `product.reload`; call `Product.reset_eav_field_cache` after bulk changes that bypass callbacks. These caches do not retain definition records globally across requests or database connections.
 
 ## Persistence and lifecycle
 
@@ -117,7 +210,7 @@ bundle exec rake test       # Minitest, including real Rails installation and ro
 bundle exec rubocop         # Lint and check formatting.
 bundle exec rubocop -a      # Apply safe formatting corrections.
 bundle exec rake            # Tests and lint together.
-bundle exec rake build      # Build pkg/eav_field-0.1.0.gem.
+bundle exec rake build      # Build pkg/eav_field-0.2.0.gem.
 ```
 
 To check a different Rails series:

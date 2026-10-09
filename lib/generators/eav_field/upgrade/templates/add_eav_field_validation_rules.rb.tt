@@ -1,0 +1,25 @@
+# frozen_string_literal: true
+
+class AddEavFieldValidationRules < ActiveRecord::Migration[<%= migration_version %>]
+  # SQLite cannot disable foreign keys inside a transaction. Its table rebuild
+  # would otherwise cascade-delete values when rolling back this column.
+  disable_ddl_transaction!
+
+  def up
+    add_column :eav_field_definitions, :validation_rules, :json
+  end
+
+  def down
+    if connection.adapter_name == "SQLite"
+      if connection.transaction_open?
+        raise ActiveRecord::IrreversibleMigration, "Run this SQLite rollback outside an existing transaction"
+      end
+
+      connection.disable_referential_integrity do
+        remove_column :eav_field_definitions, :validation_rules, :json
+      end
+    else
+      remove_column :eav_field_definitions, :validation_rules, :json
+    end
+  end
+end

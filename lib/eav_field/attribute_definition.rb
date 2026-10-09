@@ -13,7 +13,14 @@ module EavField
     validates :required, inclusion: { in: [ true, false ] }
 
     before_validation :normalize_default
+    before_validation :normalize_validation_rules
     validate :identity_is_immutable, on: :update
+    validate :default_satisfies_rules
+
+    after_save :invalidate_definition_cache
+    after_destroy :invalidate_definition_cache
+    after_commit :invalidate_definition_cache
+    after_rollback :invalidate_definition_cache
 
     def cast(value)
       Types.cast(data_type, value)
@@ -23,7 +30,34 @@ module EavField
       cast(default_value)
     end
 
+    def validation_errors(value)
+      errors = ValidationRules.new(data_type, validation_rules || {}).errors_for(cast(value))
+      errors.unshift("can't be blank") if required? && Types.missing?(value)
+      errors
+    end
+
     private
+
+    def normalize_validation_rules
+      return unless Types::COLUMNS.key?(data_type)
+
+      input = validation_rules.nil? ? {} : validation_rules
+      self.validation_rules = ValidationRules.new(data_type, input).rules
+    rescue InvalidValue => error
+      errors.add(:validation_rules, error.message)
+    end
+
+    def default_satisfies_rules
+      return if default_value.nil? || errors.any? || !Types::COLUMNS.key?(data_type)
+
+      ValidationRules.new(data_type, validation_rules || {}).errors_for(default).each do |message|
+        errors.add(:default_value, message)
+      end
+    end
+
+    def invalidate_definition_cache
+      DefinitionCache.invalidate(entity_type)
+    end
 
     def normalize_default
       return unless Types::COLUMNS.key?(data_type)
